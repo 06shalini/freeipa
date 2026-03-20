@@ -2267,3 +2267,47 @@ class TestInstallKeySizes(IntegrationTest):
 
     def test_replica_key_sizes(self):
         self.check_key_sizes(self.replicas[0])
+
+
+class TestInstallMLDSAKeyTypes(IntegrationTest):
+    num_replicas = 0
+
+    def test_install_master_mldsa_ca_key(self, server_cleanup):
+        extra_args = [
+            "--ca-key-type=ML-DSA-44",
+            "--ipa-key-type=rsa:2048",
+        ]
+        tasks.install_master(
+            self.master,
+            setup_dns=False,
+            extra_args=extra_args,
+        )
+        tasks.kinit_admin(self.master)
+
+        result = self.master.run_command(["ipa", "config-show"])
+        key_type_size = None
+        for line in result.stdout_text.splitlines():
+            line = line.strip()
+            if line.startswith("ipaservicekeytypesize:"):
+                key_type_size = line.split(":", 1)[1].strip()
+                break
+        assert key_type_size == "rsa:2048"
+
+        cmd = (
+            "certutil -L -d {alias_dir} -f {pwdfile} "
+            "-n \"caSigningCert cert-pki-ca\" -a | "
+            "openssl x509 -text -noout"
+        ).format(
+            alias_dir=paths.PKI_TOMCAT_ALIAS_DIR,
+            pwdfile=paths.PKI_TOMCAT_ALIAS_PWDFILE_TXT,
+        )
+        result = self.master.run_command(cmd)
+        assert "ML-DSA-44" in result.stdout_text
+
+        for cert_path in (paths.HTTPD_CERT_FILE, paths.KDC_CERT,
+                          paths.RA_AGENT_PEM):
+            result = self.master.run_command(
+                "openssl x509 -text -noout -in {} | "
+                "grep Public-Key".format(cert_path)
+            )
+            assert "2048 bit" in result.stdout_text

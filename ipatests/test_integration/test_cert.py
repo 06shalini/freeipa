@@ -674,3 +674,83 @@ class TestCAShowErrorHandling(IntegrationTest):
             os.path.join(paths.OPENSSL_CERTS_DIR, 'test.pem'),
             os.path.join(paths.OPENSSL_PRIVATE_DIR, 'test.key')
         ])
+
+
+def _get_key_type_size(host):
+    result = host.run_command(["ipa", "config-show"])
+    for line in result.stdout_text.splitlines():
+        line = line.strip()
+        if line.startswith("ipaservicekeytypesize:"):
+            return line.split(":", 1)[1].strip()
+    raise AssertionError("ipaservicekeytypesize not found in config-show")
+
+
+PQC_VARIANTS = [
+    {
+        "id": "mldsa44",
+        "ca_key_type": "ML-DSA-44",
+        "ipa_key_type": "rsa:2048",
+    },
+    {
+        "id": "mldsa65",
+        "ca_key_type": "ML-DSA-65",
+        "ipa_key_type": "rsa:2048",
+    },
+    {
+        "id": "mldsa87",
+        "ca_key_type": "ML-DSA-87",
+        "ipa_key_type": "rsa:2048",
+    },
+    {
+        "id": "rsa2048",
+        "ca_key_type": "RSA",
+        "ipa_key_type": "rsa:2048",
+    },
+]
+
+
+class BaseMLDSASanity(IntegrationTest):
+    num_replicas = 1
+    master_extra_args = ()
+    replica_extra_args = ()
+    expected_key_type_size = None
+
+    @classmethod
+    def install(cls, mh):
+        tasks.install_master(
+            cls.master,
+            setup_dns=True,
+            extra_args=cls.master_extra_args,
+        )
+        tasks.install_replica(
+            cls.master, cls.replicas[0],
+            setup_ca=True,
+            extra_args=cls.replica_extra_args,
+        )
+
+    def test_key_type_size_master(self):
+        tasks.kinit_admin(self.master)
+        assert _get_key_type_size(self.master) == self.expected_key_type_size
+
+    def test_key_type_size_replica(self):
+        tasks.kinit_admin(self.replicas[0])
+        assert _get_key_type_size(self.replicas[0]) == self.expected_key_type_size
+
+
+def _make_variant_class(variant):
+    name = "TestMLDSASanity_{}".format(variant["id"])
+    extra_args = [
+        "--ca-key-type={}".format(variant["ca_key_type"]),
+        "--ipa-key-type={}".format(variant["ipa_key_type"]),
+    ]
+    attrs = {
+        "master_extra_args": list(extra_args),
+        "replica_extra_args": list(extra_args),
+        "expected_key_type_size": variant["ipa_key_type"],
+    }
+    return type(name, (BaseMLDSASanity,), attrs)
+
+
+for variant in PQC_VARIANTS:
+    cls = _make_variant_class(variant)
+    globals()[cls.__name__] = cls
