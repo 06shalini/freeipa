@@ -2336,7 +2336,9 @@ class TestInstallPQCBase(IntegrationTest):
         result = host.run_command(
             f"certutil -K -d {paths.PKI_TOMCAT_ALIAS_DIR} "
             f"-f {paths.PKI_TOMCAT_ALIAS_PWDFILE_TXT} | grep -c {key_type}")
-        assert "5" in result.stdout_text
+        # Dogtag CA should have exactly 5 signing keys of the expected type
+        key_count = int(result.stdout_text.strip())
+        assert key_count == 5, f"Expected 5 CA keys, found {key_count}"
 
     def test_master_key_sizes(self):
         self.check_key_sizes(self.master)
