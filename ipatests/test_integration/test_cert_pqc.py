@@ -165,18 +165,21 @@ class PQCCertEnrollmentHelpersMixin:
     def _issue_user_certs(self, user, key_specs):
         ldap = self.master.ldap_connect()
         tasks.kinit_admin(self.master)
-        tasks.user_add(self.master, user)
-        for stem, key_type in key_specs:
-            csr_file, key_file = self._generate_user_csr(user, stem, key_type)
-            cert_file = '%s.crt' % stem
-            self._ipa_user_cert_request(user, csr_file, cert_file)
-            self._assert_user_cert_public_key(cert_file, key_type)
-            self.master.run_command(
-                ['rm', '-f', csr_file, key_file, cert_file], raiseonerr=False
-            )
-        entry = ldap.get_entry(DN(('uid', user), ('cn', 'users'),
-                                  ('cn', 'accounts'), self.master.domain.basedn))
-        assert len(entry.get('usercertificate')) == len(key_specs)
+        try:
+            tasks.user_add(self.master, user)
+            for stem, key_type in key_specs:
+                csr_file, key_file = self._generate_user_csr(user, stem, key_type)
+                cert_file = '%s.crt' % stem
+                self._ipa_user_cert_request(user, csr_file, cert_file)
+                self._assert_user_cert_public_key(cert_file, key_type)
+                self.master.run_command(
+                    ['rm', '-f', csr_file, key_file, cert_file], raiseonerr=False
+                )
+            entry = ldap.get_entry(DN(('uid', user), ('cn', 'users'),
+                                      ('cn', 'accounts'), self.master.domain.basedn))
+            assert len(entry.get('usercertificate')) == len(key_specs)
+        finally:
+            tasks.kdestroy_all(self.master)
 
     def _getcert_request_host_cert(self, host, req_id, keygen=None):
         certfile = os.path.join(paths.OPENSSL_CERTS_DIR, '%s.pem' % req_id)
