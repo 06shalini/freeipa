@@ -2355,6 +2355,81 @@ class TestInstallPQCBase(IntegrationTest):
         self.check_key_sizes(self.replicas[0])
         self.check_ca_keys(self.replicas[0])
 
+    def test_replica_ca_issues_cert_with_mldsa(self):
+        """Test that replica CA can issue certificates with ML-DSA config.
+
+        Validates:
+        - Replica CA is functional and can issue certificates
+        - Certificate issued from replica matches configured key type
+        - CA replication works correctly for ML-DSA scenarios
+        """
+        if self.num_replicas == 0:
+            raise pytest.skip("No replica installed. Skipping")
+        result = tasks.kinit_admin(self.replicas[0], raiseonerr=False)
+        if result.returncode != 0:
+            raise pytest.skip("Replica is not available. Skipping")
+
+        replica = self.replicas[0]
+        expected_key_type = self._get_key_type(self.ipa_key_type)
+
+        # Create a test user on replica
+        test_user = "pqc_replica_test_user"
+        tasks.kinit_admin(replica)
+        try:
+            tasks.user_add(replica, test_user)
+
+            # Generate CSR with the same key type as IPA installation
+            csr_file = "/tmp/replica_test.csr"
+            key_file = "/tmp/replica_test.key"
+            cert_file = "/tmp/replica_test.crt"
+
+            # Generate key and CSR based on configured IPA key type
+            if self.ipa_key_type and self.ipa_key_type.startswith("mldsa"):
+                # ML-DSA CSR
+                algo = expected_key_type
+                replica.run_command([
+                    "openssl", "genpkey", "-algorithm", algo,
+                    "-out", key_file
+                ])
+                replica.run_command([
+                    "openssl", "req", "-new", "-key", key_file,
+                    "-out", csr_file, "-subj", f"/CN={test_user}"
+                ])
+            else:
+                # RSA CSR (default)
+                replica.run_command([
+                    "openssl", "req", "-newkey", "rsa:2048",
+                    "-keyout", key_file, "-nodes", "-out", csr_file,
+                    "-subj", f"/CN={test_user}"
+                ])
+
+            # Request certificate from replica CA
+            replica.run_command([
+                "ipa", "cert-request", "--principal", test_user,
+                "--certificate-out", cert_file, csr_file
+            ])
+
+            # Validate issued certificate has expected key type
+            result = replica.run_command(
+                f"openssl x509 -in {cert_file} -noout -text | grep Public-Key"
+            )
+            assert expected_key_type in result.stdout_text, (
+                f"Expected {expected_key_type} in certificate, "
+                f"got: {result.stdout_text}"
+            )
+
+        finally:
+            # Cleanup
+            replica.run_command(
+                ["rm", "-f", csr_file, key_file, cert_file],
+                raiseonerr=False
+            )
+            replica.run_command(
+                ["ipa", "user-del", test_user],
+                raiseonerr=False
+            )
+            tasks.kdestroy_all(replica)
+
 
 class TestInstallPQCIPACerts(TestInstallPQCBase):
 
