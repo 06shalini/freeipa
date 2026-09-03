@@ -102,7 +102,7 @@ jobs:
       args:
         build_url: '{fedora-rawhide/build_url}'
         update_packages: True
-        test_suite: test_integration/test_installation.py::TestInstallPQC006a
+        test_suite: test_integration/test_installation.py::TestInstallWithMLDSA44
         template: *ci-master-frawhide
         timeout: 4800
         topology: *master_1repl
@@ -115,7 +115,7 @@ jobs:
       args:
         build_url: '{fedora-rawhide/build_url}'
         update_packages: True
-        test_suite: test_integration/test_installation.py::TestInstallPQC006b
+        test_suite: test_integration/test_installation.py::TestInstallWithMLDSA65
         template: *ci-master-frawhide
         timeout: 4800
         topology: *master_1repl
@@ -128,7 +128,7 @@ jobs:
       args:
         build_url: '{fedora-rawhide/build_url}'
         update_packages: True
-        test_suite: test_integration/test_installation.py::TestInstallPQC006c
+        test_suite: test_integration/test_installation.py::TestInstallWithMLDSA87
         template: *ci-master-frawhide
         timeout: 4800
         topology: *master_1repl
