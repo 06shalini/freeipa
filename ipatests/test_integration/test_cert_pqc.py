@@ -74,9 +74,11 @@ class PQCInstallBase:
         if cls.domain_level is not None:  # pylint: disable=no-member
             domain_level = cls.domain_level  # pylint: disable=no-member
         else:
-            domain_level = cls.master.config.domain_level  # pylint: disable=no-member
+            # pylint: disable=no-member
+            domain_level = cls.master.config.domain_level
 
-        if cls.token_password:
+        if cls.token_password:  # pylint: disable=no-member
+            # pylint: disable=no-member
             extra_args.extend(('--token-password', cls.token_password,))
         if cls.ipa_key_type:
             extra_args.extend(['--key-type-size', cls.ipa_key_type])
@@ -84,27 +86,32 @@ class PQCInstallBase:
             extra_args.extend(['--ca-key-type', cls.ca_key_type])
 
         tasks.install_master(
-            cls.master,
+            cls.master,  # pylint: disable=no-member
             setup_dns=True,
             domain_level=domain_level,
-            random_serial=cls.random_serial,
+            random_serial=cls.random_serial,  # pylint: disable=no-member
             extra_args=extra_args,
         )
-        tasks.add_a_records_for_hosts_in_master_domain(cls.master)
-        tasks.install_clients([cls.master], cls.clients)
+        tasks.add_a_records_for_hosts_in_master_domain(
+            cls.master  # pylint: disable=no-member
+        )
+        tasks.install_clients(
+            [cls.master], cls.clients  # pylint: disable=no-member
+        )
 
     @classmethod
     def install(cls, mh):
         cls._install_line_master_client_with_pqc(mh)
+        # pylint: disable=no-member
         result = cls.clients[0].run_command(['date', '+%Y-%m-%d %H:%M:%S'])
         cls.since = result.stdout_text.strip()
 
     def test_getcert_list_profile(self):
         """Profile listing plus ML-DSA httpd public key when applicable."""
-        super().test_getcert_list_profile()
+        super().test_getcert_list_profile()  # pylint: disable=no-member
         ml_label = _expected_ml_dsa_httpd_public_key_label(self.ipa_key_type)
         if ml_label:
-            pk = self.master.run_command(
+            pk = self.master.run_command(  # pylint: disable=no-member
                 'openssl x509 -text -noout -in %s | grep Public-Key'
                 % paths.HTTPD_CERT_FILE
             ).stdout_text
@@ -135,12 +142,13 @@ class PQCCertHelpers:
     mldsa_cert_keygen = 'ML-DSA-65'
 
     def _mldsa_algorithm(self):
+        # pylint: disable=no-member
         return _mldsa_openssl_algorithm(
             self.ipa_key_type, self.mldsa_cert_keygen
         )
 
     def _require_openssl_mldsa(self, host=None):
-        host = host or self.master
+        host = host or self.master  # pylint: disable=no-member
         probe = os.path.join(paths.OPENSSL_PRIVATE_DIR, '.mldsa-probe.key')
         algo = self._mldsa_algorithm()
         try:
@@ -160,17 +168,18 @@ class PQCCertHelpers:
         csr_file = '%s.csr' % stem
         key_file = '%s.key' % stem
         if key_type == 'rsa':
-            self.master.run_command([
+            self.master.run_command([  # pylint: disable=no-member
                 'openssl', 'req', '-newkey', 'rsa:2048', '-keyout', key_file,
                 '-nodes', '-out', csr_file, '-subj', '/CN=' + user,
             ])
         elif key_type == 'mldsa':
+            # pylint: disable=no-member
             self._require_openssl_mldsa(self.master)
             algo = self._mldsa_algorithm()
-            self.master.run_command(
+            self.master.run_command(  # pylint: disable=no-member
                 ['openssl', 'genpkey', '-algorithm', algo, '-out', key_file]
             )
-            self.master.run_command([
+            self.master.run_command([  # pylint: disable=no-member
                 'openssl', 'req', '-new', '-key', key_file, '-out', csr_file,
                 '-subj', '/CN=' + user,
             ])
@@ -179,13 +188,13 @@ class PQCCertHelpers:
         return csr_file, key_file
 
     def _ipa_user_cert_request(self, user, csr_file, cert_file):
-        self.master.run_command([
+        self.master.run_command([  # pylint: disable=no-member
             'ipa', 'cert-request', '--principal', user,
             '--certificate-out', cert_file, csr_file,
         ])
 
     def _assert_user_cert_public_key(self, cert_file, key_type):
-        pk = self.master.run_command(
+        pk = self.master.run_command(  # pylint: disable=no-member
             'openssl x509 -in %s -noout -text | grep Public-Key' % cert_file
         ).stdout_text
         if key_type == 'rsa':
@@ -402,9 +411,13 @@ class PQCEnrollmentInstall:
             extra_args.extend(['--key-type-size', cls.ipa_key_type])
         if cls.ca_key_type:
             extra_args.extend(['--ca-key-type', cls.ca_key_type])
-        tasks.install_master(cls.master, setup_dns=True, extra_args=extra_args)
+        tasks.install_master(
+            cls.master, setup_dns=True,  # pylint: disable=no-member
+            extra_args=extra_args
+        )
         tasks.install_replica(
-            cls.master, cls.replicas[0], setup_ca=True,
+            cls.master, cls.replicas[0],  # pylint: disable=no-member
+            setup_ca=True,
         )
 
     def _cleanup_mldsa_enroll_files(self, host, req_id):

@@ -2451,8 +2451,8 @@ class TestInstallPQCCACerts(TestInstallPQCBase):
     ca_key_type = "mldsa:44"
 
 
-class TestInstallPQC006a(TestInstallPQCBase):
-    """IPA-PQC-006a: install with ML-DSA-44 CA and server keys."""
+class TestInstallWithMLDSA44(TestInstallPQCBase):
+    """Install with ML-DSA-44 for both IPA service keys and CA."""
 
     num_replicas = 1
     master_with_dns = True
@@ -2460,8 +2460,8 @@ class TestInstallPQC006a(TestInstallPQCBase):
     ca_key_type = "mldsa:44"
 
 
-class TestInstallPQC006b(TestInstallPQCBase):
-    """IPA-PQC-006b: install with ML-DSA-65 CA and server keys."""
+class TestInstallWithMLDSA65(TestInstallPQCBase):
+    """Install with ML-DSA-65 for both IPA service keys and CA."""
 
     num_replicas = 1
     master_with_dns = True
@@ -2469,8 +2469,8 @@ class TestInstallPQC006b(TestInstallPQCBase):
     ca_key_type = "mldsa:65"
 
 
-class TestInstallPQC006c(TestInstallPQCBase):
-    """IPA-PQC-006c: install with ML-DSA-87 CA and server keys."""
+class TestInstallWithMLDSA87(TestInstallPQCBase):
+    """Install with ML-DSA-87 for both IPA service keys and CA."""
 
     num_replicas = 1
     master_with_dns = True
