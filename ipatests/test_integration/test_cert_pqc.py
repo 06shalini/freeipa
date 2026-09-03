@@ -25,7 +25,7 @@ from ipatests.test_integration.test_cert import TestInstallMasterClient
 
 
 def _expected_ml_dsa_httpd_public_key_label(ipa_key_type):
-    """Substring expected on ``openssl x509 ... | grep Public-Key`` for httpd."""
+    """Expected substring on openssl x509 Public-Key output for httpd."""
     if not ipa_key_type:
         return None
     kt = ipa_key_type.strip().lower()
@@ -56,9 +56,12 @@ class PQCInstallBase:
     TestInstallMasterClient to get existing cert test coverage.
 
     Attributes:
-        ipa_key_type: ML-DSA key size for IPA service certs (e.g., 'mldsa:65')
-        ca_key_type: ML-DSA key size for CA signing keys (e.g., 'mldsa:87')
-        mldsa_cert_keygen: OpenSSL algorithm name for certmonger (e.g., 'ML-DSA-65')
+        ipa_key_type: ML-DSA key size for IPA service certs
+            (e.g., 'mldsa:65')
+        ca_key_type: ML-DSA key size for CA signing keys
+            (e.g., 'mldsa:87')
+        mldsa_cert_keygen: OpenSSL algorithm name for certmonger
+            (e.g., 'ML-DSA-65')
     """
 
     ipa_key_type = None
@@ -68,10 +71,10 @@ class PQCInstallBase:
     @classmethod
     def _install_line_master_client_with_pqc(cls, mh):
         extra_args = []
-        if cls.domain_level is not None:
-            domain_level = cls.domain_level
+        if cls.domain_level is not None:  # pylint: disable=no-member
+            domain_level = cls.domain_level  # pylint: disable=no-member
         else:
-            domain_level = cls.master.config.domain_level
+            domain_level = cls.master.config.domain_level  # pylint: disable=no-member
 
         if cls.token_password:
             extra_args.extend(('--token-password', cls.token_password,))
@@ -132,7 +135,9 @@ class PQCCertHelpers:
     mldsa_cert_keygen = 'ML-DSA-65'
 
     def _mldsa_algorithm(self):
-        return _mldsa_openssl_algorithm(self.ipa_key_type, self.mldsa_cert_keygen)
+        return _mldsa_openssl_algorithm(
+            self.ipa_key_type, self.mldsa_cert_keygen
+        )
 
     def _require_openssl_mldsa(self, host=None):
         host = host or self.master
@@ -196,15 +201,20 @@ class PQCCertHelpers:
         try:
             tasks.user_add(self.master, user)
             for stem, key_type in key_specs:
-                csr_file, key_file = self._generate_user_csr(user, stem, key_type)
+                csr_file, key_file = self._generate_user_csr(
+                    user, stem, key_type
+                )
                 cert_file = '%s.crt' % stem
                 self._ipa_user_cert_request(user, csr_file, cert_file)
                 self._assert_user_cert_public_key(cert_file, key_type)
                 self.master.run_command(
-                    ['rm', '-f', csr_file, key_file, cert_file], raiseonerr=False
+                    ['rm', '-f', csr_file, key_file, cert_file],
+                    raiseonerr=False
                 )
-            entry = ldap.get_entry(DN(('uid', user), ('cn', 'users'),
-                                      ('cn', 'accounts'), self.master.domain.basedn))
+            entry = ldap.get_entry(
+                DN(('uid', user), ('cn', 'users'), ('cn', 'accounts'),
+                   self.master.domain.basedn)
+            )
             assert len(entry.get('usercertificate')) == len(key_specs)
         finally:
             tasks.kdestroy_all(self.master)
