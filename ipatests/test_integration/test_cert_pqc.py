@@ -48,8 +48,18 @@ def _mldsa_openssl_algorithm(ipa_key_type, mldsa_cert_keygen=None):
     return label or 'ML-DSA-65'
 
 
-class PQCMasterClientInstallMixin:
-    """PQC ``ipa-server-install`` for master + one client (line topology)."""
+class PQCInstallBase:
+    """Base class for ML-DSA FreeIPA installations.
+
+    Provides install() method with --key-type-size and --ca-key-type parameters
+    for master+client (line topology). Subclasses inherit from this plus
+    TestInstallMasterClient to get existing cert test coverage.
+
+    Attributes:
+        ipa_key_type: ML-DSA key size for IPA service certs (e.g., 'mldsa:65')
+        ca_key_type: ML-DSA key size for CA signing keys (e.g., 'mldsa:87')
+        mldsa_cert_keygen: OpenSSL algorithm name for certmonger (e.g., 'ML-DSA-65')
+    """
 
     ipa_key_type = None
     ca_key_type = None
@@ -98,8 +108,26 @@ class PQCMasterClientInstallMixin:
             assert ml_label in pk
 
 
-class PQCCertEnrollmentHelpersMixin:
-    """CSR generation and certmonger enrollment helpers."""
+class PQCCertHelpers:
+    """Reusable helper methods for ML-DSA certificate operations.
+
+    Provides CSR generation, certmonger enrollment, and cleanup helpers
+    for both RSA and ML-DSA certificates. All helpers use try/finally
+    for proper resource cleanup.
+
+    Methods:
+        _require_openssl_mldsa: Skip test if OpenSSL lacks ML-DSA support
+        _generate_user_csr: Generate RSA or ML-DSA CSR for user certs
+        _ipa_user_cert_request: Request cert via 'ipa cert-request'
+        _issue_user_certs: Full workflow to issue and validate user certs
+        _getcert_request_host_cert: Request host cert via certmonger
+        _cleanup_getcert_request: Stop tracking and cleanup cert files
+
+    TODO: Add renewal/rekey helpers for future test scenarios:
+        - _getcert_resubmit: Manual cert renewal via 'getcert resubmit'
+        - _getcert_rekey: Re-key operation with new key type/size
+        - _simulate_cert_expiry: Trigger auto-renewal for expiry tests
+    """
 
     mldsa_cert_keygen = 'ML-DSA-65'
 
@@ -220,10 +248,19 @@ class PQCCertEnrollmentHelpersMixin:
         )
 
 
-class TestInstallMasterClientMLDSA(PQCMasterClientInstallMixin,
-                                   PQCCertEnrollmentHelpersMixin,
+class TestInstallMasterClientMLDSA(PQCInstallBase,
+                                   PQCCertHelpers,
                                    TestInstallMasterClient):
-    """``TestInstallMasterClient`` scenarios with ML-DSA IPA keys (RSA CA)."""
+    """ML-DSA IPA service keys with default RSA CA.
+
+    Inherits 20+ existing cert tests from TestInstallMasterClient and adds
+    ML-DSA-specific scenarios: user cert requests with ML-DSA CSRs, and
+    certmonger host cert enrollment with ML-DSA keys.
+
+    Configuration:
+        ipa_key_type: 'mldsa' (default ML-DSA-65)
+        ca_key_type: None (RSA CA)
+    """
 
     ipa_key_type = 'mldsa'
     ca_key_type = None
@@ -251,10 +288,22 @@ class TestInstallMasterClientMLDSA(PQCMasterClientInstallMixin,
             self._cleanup_getcert_request(self.master, req_id)
 
 
-class TestInstallMasterClientMLDSACA(PQCMasterClientInstallMixin,
-                                     PQCCertEnrollmentHelpersMixin,
+class TestInstallMasterClientMLDSACA(PQCInstallBase,
+                                     PQCCertHelpers,
                                      TestInstallMasterClient):
-    """``TestInstallMasterClient`` scenarios with ML-DSA IPA keys and CA."""
+    """ML-DSA IPA service keys and ML-DSA CA signing keys.
+
+    Tests full ML-DSA deployment: both IPA service certs and CA signing
+    keys use ML-DSA. Validates mixed cert issuance (RSA CSR → ML-DSA CA,
+    ML-DSA CSR → ML-DSA CA) and certmonger enrollment from both master
+    and client.
+
+    Configuration:
+        ipa_key_type: 'mldsa' (default ML-DSA-65)
+        ca_key_type: 'mldsa' (default ML-DSA-65)
+
+    TODO: Add renewal/rekey test scenarios in future iterations.
+    """
 
     ipa_key_type = 'mldsa'
     ca_key_type = 'mldsa'
@@ -327,7 +376,7 @@ class TestInstallMasterClientMLDSACA(PQCMasterClientInstallMixin,
             self._cleanup_getcert_request(host, req_id)
 
 
-class PQCCertEnrollmentInstallMixin:
+class PQCEnrollmentInstall:
     """PQC install for master + replica (enrollment-focused topology)."""
 
     num_replicas = 1
@@ -431,7 +480,7 @@ class PQCCertEnrollmentInstallMixin:
             host.run_command(['rm', '-f', csr, key, cert], raiseonerr=False)
 
 
-class TestPQCCertEnrollmentIPACerts(PQCCertEnrollmentInstallMixin,
+class TestPQCCertEnrollmentIPACerts(PQCEnrollmentInstall,
                                     IntegrationTest):
     """Certmonger enrollment with ML-DSA service keys (RSA CA)."""
 
@@ -461,7 +510,7 @@ class TestPQCCertEnrollmentIPACerts(PQCCertEnrollmentInstallMixin,
         self._request_mldsa_via_ipa_cert_request(self.master, stem, suffix)
 
 
-class TestPQCCertEnrollmentCACerts(PQCCertEnrollmentInstallMixin,
+class TestPQCCertEnrollmentCACerts(PQCEnrollmentInstall,
                                    IntegrationTest):
     """Enrollment when both IPA service keys and the CA use ML-DSA."""
 
