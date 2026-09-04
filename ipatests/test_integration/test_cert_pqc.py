@@ -18,6 +18,7 @@ unchanged for RSA/default reference.
 # replicas attributes via pytest fixtures, which pylint cannot detect.
 
 import os
+import re
 import random
 import string
 
@@ -290,6 +291,20 @@ class TestInstallMasterClientMLDSA(PQCInstallBase,
     ca_key_type = None
     mldsa_cert_keygen = 'ML-DSA-65'
 
+    # Skip inherited tests that aren't ML-DSA specific or are covered in
+    # TestInstallMasterClientMLDSACA (which tests largest cert scenario)
+    @pytest.mark.skip(reason="Not ML-DSA specific, covered in parent class")
+    def test_certmonger_ipa_responder_jsonrpc(self):
+        pass
+
+    @pytest.mark.skip(reason="Large cert handling tested in MLDSA CA variant")
+    def test_cacert_file_appear_with_option_F(self):
+        pass
+
+    @pytest.mark.skip(reason="SAN with ML-DSA tested in MLDSA CA variant")
+    def test_ipa_getcert_san_aci(self):
+        pass
+
     def test_user_cert_mldsa_csr_signed_by_rsa_ca(self):
         """ML-DSA user CSRs are signed by the default RSA CA."""
         self._issue_user_certs(
@@ -332,6 +347,79 @@ class TestInstallMasterClientMLDSACA(PQCInstallBase,
     ipa_key_type = 'mldsa'
     ca_key_type = 'mldsa'
     mldsa_cert_keygen = 'ML-DSA-65'
+
+    # Skip protocol test - not ML-DSA specific
+    @pytest.mark.skip(reason="Not ML-DSA specific, covered in parent class")
+    def test_certmonger_ipa_responder_jsonrpc(self):
+        pass
+
+    def test_cacert_file_appear_with_option_F(self):
+        """Test -F option with ML-DSA CA cert (validates large cert handling).
+
+        ML-DSA CA certificates are significantly larger (~6KB vs ~2KB for RSA).
+        This test validates that getcert -F option correctly handles the larger
+        CA cert file creation timing.
+
+        Related: https://codeberg.org/freeipa/freeipa/issues/8105
+        """
+        certfile = os.path.join(paths.OPENSSL_CERTS_DIR, "test.pem")
+        keyfile = os.path.join(paths.OPENSSL_PRIVATE_DIR, "test.key")
+        cafile = os.path.join(paths.OPENSSL_DIR, "test.CA")
+
+        try:
+            # Run parent test (validates -F option behavior)
+            super().test_cacert_file_appear_with_option_F()
+        finally:
+            # Cleanup to avoid conflicts with subsequent test runs
+            self.clients[0].run_command(
+                ['ipa-getcert', 'stop-tracking', '-f', certfile],
+                raiseonerr=False
+            )
+            self.clients[0].run_command(
+                ['rm', '-f', certfile, keyfile, cafile],
+                raiseonerr=False
+            )
+
+    def test_ipa_getcert_san_aci(self):
+        """Test DNS and IP SAN extensions with ML-DSA certs.
+
+        ML-DSA certificates with SAN extensions are larger and encode
+        differently than RSA. This validates that large ML-DSA certs with
+        SANs are correctly issued and ACIs properly enforced.
+        """
+        certfile = os.path.join(paths.OPENSSL_CERTS_DIR, "test2.pem")
+        keyfile = os.path.join(paths.OPENSSL_PRIVATE_DIR, "test2.key")
+
+        try:
+            # Run parent test (validates SAN + ACI behavior)
+            super().test_ipa_getcert_san_aci()
+        finally:
+            # Cleanup certmonger tracking
+            self.clients[0].run_command(
+                ['ipa-getcert', 'stop-tracking', '-f', certfile],
+                raiseonerr=False
+            )
+            self.clients[0].run_command(
+                ['rm', '-f', certfile, keyfile],
+                raiseonerr=False
+            )
+
+            # Cleanup DNS records
+            hostname = self.clients[0].hostname
+            tasks.kinit_admin(self.master)
+            try:
+                zone = tasks.prepare_reverse_zone(
+                    self.master, self.clients[0].ip)[0]
+                rec = str(self.clients[0].ip).split('.')[3]
+                self.master.run_command(
+                    ['ipa', 'dnsrecord-del', zone, rec, '--ptr-rec', hostname],
+                    raiseonerr=False
+                )
+            except Exception:
+                # DNS cleanup is best-effort
+                pass
+            finally:
+                tasks.kdestroy_all(self.master)
 
     def test_ca_signing_keys_are_mldsa(self):
         """Dogtag CA signing keys use ML-DSA."""
