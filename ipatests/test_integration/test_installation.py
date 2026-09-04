@@ -2330,7 +2330,7 @@ class TestInstallPQCBase(IntegrationTest):
         assert "2048 bit" in result.stdout_text
 
     def check_ca_keys(self, host):
-        """Verify that the CA keys are all RSA"""
+        """Verify Dogtag CA signing keys match the configured CA key type."""
         key_type = self._get_key_type(self.ca_key_type)
         if "ML-DSA-" in key_type:
             key_type = "mldsa"
@@ -2338,7 +2338,9 @@ class TestInstallPQCBase(IntegrationTest):
         result = host.run_command(
             f"certutil -K -d {paths.PKI_TOMCAT_ALIAS_DIR} "
             f"-f {paths.PKI_TOMCAT_ALIAS_PWDFILE_TXT} | grep -c {key_type}")
-        assert "5" in result.stdout_text
+        # Dogtag CA should have exactly 5 signing keys of the expected type
+        key_count = int(result.stdout_text.strip())
+        assert key_count == 5, f"Expected 5 CA keys, found {key_count}"
 
     def test_master_key_sizes(self):
         self.check_key_sizes(self.master)
@@ -2355,6 +2357,81 @@ class TestInstallPQCBase(IntegrationTest):
         self.check_key_sizes(self.replicas[0])
         self.check_ca_keys(self.replicas[0])
 
+    def test_replica_ca_issues_cert_with_mldsa(self):
+        """Test that replica CA can issue certificates with ML-DSA config.
+
+        Validates:
+        - Replica CA is functional and can issue certificates
+        - Certificate issued from replica matches configured key type
+        - CA replication works correctly for ML-DSA scenarios
+        """
+        if self.num_replicas == 0:
+            raise pytest.skip("No replica installed. Skipping")
+        result = tasks.kinit_admin(self.replicas[0], raiseonerr=False)
+        if result.returncode != 0:
+            raise pytest.skip("Replica is not available. Skipping")
+
+        replica = self.replicas[0]
+        expected_key_type = self._get_key_type(self.ipa_key_type)
+
+        # Create a test user on replica
+        test_user = "pqc_replica_test_user"
+        tasks.kinit_admin(replica)
+        try:
+            tasks.user_add(replica, test_user)
+
+            # Generate CSR with the same key type as IPA installation
+            csr_file = "/tmp/replica_test.csr"
+            key_file = "/tmp/replica_test.key"
+            cert_file = "/tmp/replica_test.crt"
+
+            # Generate key and CSR based on configured IPA key type
+            if self.ipa_key_type and self.ipa_key_type.startswith("mldsa"):
+                # ML-DSA CSR
+                algo = expected_key_type
+                replica.run_command([
+                    "openssl", "genpkey", "-algorithm", algo,
+                    "-out", key_file
+                ])
+                replica.run_command([
+                    "openssl", "req", "-new", "-key", key_file,
+                    "-out", csr_file, "-subj", f"/CN={test_user}"
+                ])
+            else:
+                # RSA CSR (default)
+                replica.run_command([
+                    "openssl", "req", "-newkey", "rsa:2048",
+                    "-keyout", key_file, "-nodes", "-out", csr_file,
+                    "-subj", f"/CN={test_user}"
+                ])
+
+            # Request certificate from replica CA
+            replica.run_command([
+                "ipa", "cert-request", "--principal", test_user,
+                "--certificate-out", cert_file, csr_file
+            ])
+
+            # Validate issued certificate has expected key type
+            result = replica.run_command(
+                f"openssl x509 -in {cert_file} -noout -text | grep Public-Key"
+            )
+            assert expected_key_type in result.stdout_text, (
+                f"Expected {expected_key_type} in certificate, "
+                f"got: {result.stdout_text}"
+            )
+
+        finally:
+            # Cleanup
+            replica.run_command(
+                ["rm", "-f", csr_file, key_file, cert_file],
+                raiseonerr=False
+            )
+            replica.run_command(
+                ["ipa", "user-del", test_user],
+                raiseonerr=False
+            )
+            tasks.kdestroy_all(replica)
+
 
 class TestInstallPQCIPACerts(TestInstallPQCBase):
 
@@ -2365,8 +2442,39 @@ class TestInstallPQCIPACerts(TestInstallPQCBase):
 
 
 class TestInstallPQCCACerts(TestInstallPQCBase):
+    """ML-DSA-44 server keys with ML-DSA-65 (default) CA.
+
+    Legacy name; see also 006a.
+    """
+
+    num_replicas = 1
+    master_with_dns = True
+    ipa_key_type = "mldsa"
+    ca_key_type = "mldsa:44"
+
+
+class TestInstallWithMLDSA44(TestInstallPQCBase):
+    """Install with ML-DSA-44 for both IPA service keys and CA."""
 
     num_replicas = 1
     master_with_dns = True
     ipa_key_type = "mldsa:44"
-    ca_key_type = "mldsa"
+    ca_key_type = "mldsa:44"
+
+
+class TestInstallWithMLDSA65(TestInstallPQCBase):
+    """Install with ML-DSA-65 for both IPA service keys and CA."""
+
+    num_replicas = 1
+    master_with_dns = True
+    ipa_key_type = "mldsa:65"
+    ca_key_type = "mldsa:65"
+
+
+class TestInstallWithMLDSA87(TestInstallPQCBase):
+    """Install with ML-DSA-87 for both IPA service keys and CA."""
+
+    num_replicas = 1
+    master_with_dns = True
+    ipa_key_type = "mldsa:87"
+    ca_key_type = "mldsa:87"
