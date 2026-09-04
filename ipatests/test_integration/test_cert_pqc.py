@@ -18,7 +18,6 @@ unchanged for RSA/default reference.
 # replicas attributes via pytest fixtures, which pylint cannot detect.
 
 import os
-import re
 import random
 import string
 
