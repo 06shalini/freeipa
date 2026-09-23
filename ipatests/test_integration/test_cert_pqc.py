@@ -252,6 +252,10 @@ class PQCCertHelpers:
             '-U', 'id-kp-clientAuth', '-T', profile,
         ]
         if keygen:
+            # Combined form (``-G ML-DSA-65``). Avoid ``-G ML-DSA -g 65``
+            # here: request expands that to ML-DSA-65 but also stores
+            # key_gen_size=65, which later mismatches keyiread's real size
+            # and makes resubmit regenerate the key.
             cmd_arg.extend(['-G', keygen])
         if not auto_renew:
             # Disable autorenew so expiry tests can enable it after snapshot.
@@ -291,20 +295,32 @@ class PQCCertHelpers:
             'openssl x509 -in %s -noout -pubkey | openssl sha256' % certfile
         ).stdout_text.strip()
 
+    def _keyfile_sha256(self, host, req_id):
+        """SHA-256 of the private key file for req_id."""
+        keyfile = os.path.join(paths.OPENSSL_PRIVATE_DIR, '%s.key' % req_id)
+        return host.run_command(
+            ['openssl', 'sha256', keyfile]
+        ).stdout_text.strip()
+
     def _cert_serial(self, host, certfile):
         return host.run_command(
             ['openssl', 'x509', '-in', certfile, '-noout', '-serial']
         ).stdout_text.strip()
 
     def _getcert_rekey(self, host, req_id, keygen=None, new_id=None):
-        """Rekey like TestCertmongerRekey, using ``-G`` for ML-DSA.
+        """Rekey like TestCertmongerRekey.
 
-        For ML-DSA, strength is part of the OpenSSL algorithm name passed
-        via ``-G`` (e.g. ``ML-DSA-65``); ``-g`` is not required alongside it.
+        For ML-DSA, certmonger rekey expects the full algorithm name on
+        ``-G`` (``ML-DSA-44`` / ``65`` / ``87``). Bare ``-G ML-DSA -g N``
+        is expanded only on *request*, not on rekey; the daemon rejects
+        bare ``ML-DSA`` as KEY_TYPE. Optionally pass ``-g N`` as well to
+        match certmonger's own ML-DSA rekey tests (key_gen_type + size).
         """
         cmd = ['getcert', 'rekey', '-i', req_id]
         if keygen:
             cmd.extend(['-G', keygen])
+            if keygen.startswith('ML-DSA-'):
+                cmd.extend(['-g', keygen.rsplit('-', 1)[-1]])
         if new_id:
             cmd.extend(['-I', new_id])
         result = host.run_command(cmd)
@@ -661,7 +677,7 @@ class TestInstallMasterClientMLDSACA(PQCInstallBase,
         """Rekey ML-DSA-65 → ML-DSA-65: new key, same strength.
 
         Explicit PQC coverage parallel to TestCertmongerRekey's RSA
-        ``-g`` size change; ML-DSA uses ``-G ML-DSA-65`` only.
+        ``-g`` size change; ML-DSA rekey uses ``-G ML-DSA-65 -g 65``.
         """
         req_id = 'mldsa-rekey-same'
         try:
@@ -718,16 +734,21 @@ class TestInstallMasterClientMLDSACA(PQCInstallBase,
                 self.master, req_id, keygen=self.mldsa_cert_keygen,
             )
             before_fp = self._cert_pubkey_sha256(self.master, certfile)
+            before_key = self._keyfile_sha256(self.master, req_id)
             before_serial = self._cert_serial(self.master, certfile)
 
             self._getcert_resubmit(self.master, req_id)
 
             after_fp = self._cert_pubkey_sha256(self.master, certfile)
+            after_key = self._keyfile_sha256(self.master, req_id)
             after_serial = self._cert_serial(self.master, certfile)
             pk_out = self._cert_public_key_label(self.master, certfile)
             assert self.mldsa_cert_keygen in pk_out, pk_out
             assert before_fp == after_fp, (
                 'resubmit must preserve the existing ML-DSA public key'
+            )
+            assert before_key == after_key, (
+                'resubmit must preserve the existing ML-DSA private key file'
             )
             assert before_serial != after_serial, (
                 'resubmit should issue a new certificate (serial unchanged)'
