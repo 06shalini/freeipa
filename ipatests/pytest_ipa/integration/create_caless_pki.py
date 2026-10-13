@@ -25,6 +25,10 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+try:
+    from cryptography.hazmat.primitives.asymmetric import mldsa
+except ImportError:  # pragma: no cover
+    mldsa = None
 from cryptography.x509.oid import NameOID
 from packaging.version import parse as parse_version
 from pyasn1.type import univ, char, namedtype, tag
@@ -45,6 +49,8 @@ server2 = None
 client = None
 password = None
 cert_dir = None
+key_type = 'rsa'  # rsa | mldsa for current create_pki() run
+key_size = 2048
 
 CertInfo = collections.namedtuple('CertInfo', 'nick key cert counter')
 
@@ -328,11 +334,14 @@ def profile_kdc(builder, ca_nick, ca,
 
 
 def gen_cert(profile, nick_base, subject, ca=None, **kwargs):
-    key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=2048,
-        backend=default_backend(),
-    )
+    if key_type == 'mldsa':
+        key = getattr(mldsa, 'MLDSA%dPrivateKey' % key_size).generate()
+    else:
+        key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=key_size,
+            backend=default_backend(),
+        )
     public_key = key.public_key()
 
     counter = itertools.count(1)
@@ -356,9 +365,11 @@ def gen_cert(profile, nick_base, subject, ca=None, **kwargs):
     builder = builder.public_key(public_key)
     builder = profile(builder, ca_nick, ca, **kwargs)
 
+    # ML-DSA requires algorithm=None; RSA uses SHA-256
+    algorithm = None if key_type == 'mldsa' else hashes.SHA256()
     cert = builder.sign(
         private_key=ca_key,
-        algorithm=hashes.SHA256(),
+        algorithm=algorithm,
         backend=default_backend(),
     )
 
@@ -411,9 +422,10 @@ def revoke_cert(ca, serial):
 
     crl_builder = crl_builder.add_revoked_certificate(revoked_cert)
 
+    algorithm = None if key_type == 'mldsa' else hashes.SHA256()
     crl = crl_builder.sign(
         private_key=ca.key,
-        algorithm=hashes.SHA256(),
+        algorithm=algorithm,
         backend=default_backend(),
     )
 
@@ -570,7 +582,16 @@ def gen_subtree(nick_base, org, ca=None):
     return subca
 
 
-def create_pki():
+def create_pki(key_type_size='rsa:2048'):
+    """Generate the CA-less certificate tree.
+
+    key_type_size is IPA-style type[:strength], e.g. rsa:2048 or mldsa:65.
+    """
+    global key_type, key_size
+    parts = (key_type_size or 'rsa:2048').lower().split(':')
+    key_type = parts[0]
+    key_size = int(parts[1]) if len(parts) > 1 else {
+        'rsa': 2048, 'mldsa': 65}[key_type]
 
     gen_cert(profile_server, u'server-selfsign',
              x509.Name([

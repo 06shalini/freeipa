@@ -33,6 +33,7 @@ import six
 
 from ipalib import x509
 from ipapython import ipautil
+from ipapython.ipaldap import realm_to_serverid
 from ipaplatform.paths import paths
 from ipapython.dn import DN
 from ipatests.test_integration.base import IntegrationTest
@@ -130,6 +131,9 @@ class CALessBase(IntegrationTest):
     # In order that the uninstall code finds the attribute a class attribute
     # is added.
     cert_dir = None
+    # IPA-style key type[:strength] for the generated CA-less PKI tree.
+    # Default preserves historical RSA:2048 behaviour.
+    key_type_size = 'rsa:2048'
 
     @classmethod
     def install(cls, mh):
@@ -157,9 +161,18 @@ class CALessBase(IntegrationTest):
         create_caless_pki.password = unicode(cls.master.config.dirman_password)
         create_caless_pki.cert_dir = unicode(cls.cert_dir)
 
+        key_type_size = cls.key_type_size or 'rsa:2048'
+        if key_type_size.lower().startswith('mldsa') and not _mldsa_supported():
+            pytest.skip(
+                'ML-DSA is not supported by python-cryptography/OpenSSL'
+            )
+
         # here we generate our certificates (not yet converted to .p12)
-        logger.info('Generating certificates to %s', cls.cert_dir)
-        create_caless_pki.create_pki()
+        logger.info(
+            'Generating certificates to %s (key_type_size=%s)',
+            cls.cert_dir, key_type_size,
+        )
+        create_caless_pki.create_pki(key_type_size=key_type_size)
 
         for host in cls.get_all_hosts():
             tasks.apply_common_fixes(host)
@@ -362,10 +375,14 @@ class CALessBase(IntegrationTest):
                 with open(cert_fname) as cert:
                     chain.write(cert.read())
 
-        ipautil.run([paths.OPENSSL, "pkcs12", "-export", "-out", filename,
-                     "-inkey", key_fname, "-in", certchain_fname, "-passin",
-                     "pass:" + cls.cert_password, "-passout", "pass:" +
-                     password, "-name", nickname], cwd=cls.cert_dir)
+        args = [paths.OPENSSL, "pkcs12", "-export", "-out", filename,
+                "-inkey", key_fname, "-in", certchain_fname, "-passin",
+                "pass:" + cls.cert_password, "-passout", "pass:" +
+                password, "-name", nickname]
+        # Signature-only ML-DSA keys must be exported as signing keys
+        if (cls.key_type_size or '').lower().startswith('mldsa'):
+            args.append('-keysig')
+        ipautil.run(args, cwd=cls.cert_dir)
 
     @classmethod
     def prepare_cacert(cls, nickname, filename=None):
@@ -1694,3 +1711,174 @@ class TestServerCALessToExternalCA(CALessBase):
         # Continue with ipa-ca-install
         ca_master_post = tasks.install_ca(self.master, cert_files=cert_files)
         assert ca_master_post.returncode == 0
+
+
+def _mldsa_supported():
+    """Return True if cryptography can generate ML-DSA keys."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric import mldsa
+        mldsa.MLDSA65PrivateKey.generate()
+    except Exception:
+        return False
+    return True
+
+
+def expected_mldsa_public_key_label(key_type_size):
+    """OpenSSL x509 Public-Key label for an ML-DSA key_type_size."""
+    if not key_type_size:
+        return None
+    value = key_type_size.strip().lower()
+    if not value.startswith('mldsa'):
+        return None
+    parts = value.split(':')
+    return 'ML-DSA-{}'.format(parts[1] if len(parts) > 1 else '65')
+
+
+class CALessMLDSABase:
+    """Base for CA-less deployments using an ML-DSA PKI tree.
+
+    Provides ``key_type_size`` / ``ca_key_type`` defaults and helpers to
+    verify ML-DSA HTTP/DS certificates. Test classes inherit from this
+    plus :class:`CALessBase` (same pattern as ``PQCInstallBase`` in the
+    certmonger PQC tests).
+    """
+
+    key_type_size = 'mldsa:65'
+    # IPA CA key type used when promoting caless → cafull
+    ca_key_type = 'mldsa'
+
+    def verify_mldsa_service_certs(self, host=None):
+        """Assert HTTP/DS certs use the expected ML-DSA public key."""
+        if host is None:
+            host = self.master
+        label = expected_mldsa_public_key_label(self.key_type_size)
+        assert label is not None
+
+        result = host.run_command(
+            'openssl x509 -text -noout -in %s | grep Public-Key'
+            % paths.HTTPD_CERT_FILE
+        )
+        assert label in result.stdout_text
+
+        serverid = realm_to_serverid(host.domain.realm).upper()
+        instance = paths.ETC_DIRSRV_SLAPD_INSTANCE_TEMPLATE % serverid
+        result = host.run_command(
+            "certutil -L -d %s -n Server-Cert -a | "
+            "openssl x509 -text -noout | grep Public-Key" % instance
+        )
+        assert label in result.stdout_text
+
+
+class TestServerInstallMLDSA(CALessMLDSABase, CALessBase):
+    """CA-less master install with ML-DSA HTTP/DS and external root."""
+
+    num_replicas = 0
+
+    @server_install_teardown
+    def test_valid_certs(self):
+        "IPA server install with valid ML-DSA certificates"
+
+        self.create_pkcs12('ca1/server')
+        self.prepare_cacert('ca1')
+
+        result = self.install_server()
+        assert result.returncode == 0, result.stderr_text or result.stdout_text
+        self.verify_installation()
+        self.verify_mldsa_service_certs(self.master)
+
+
+class TestReplicaInstallMLDSA(CALessMLDSABase, CALessBase):
+    """CA-less replica install against an ML-DSA CA-less master."""
+
+    num_replicas = 1
+
+    @classmethod
+    def install(cls, mh):
+        super(TestReplicaInstallMLDSA, cls).install(mh)
+        cls.create_pkcs12('ca1/server')
+        cls.prepare_cacert('ca1')
+        result = cls.install_server()
+        assert result.returncode == 0
+        cls.domain_level = tasks.domainlevel(cls.master)
+
+    @replica_install_teardown
+    def test_valid_certs(self):
+        "IPA replica install with valid ML-DSA certificates"
+
+        self.create_pkcs12('ca1/replica', filename='server.p12')
+
+        result = self.prepare_replica(http_pkcs12='server.p12',
+                                      dirsrv_pkcs12='server.p12')
+        assert result.returncode == 0
+        self.verify_installation()
+        self.verify_mldsa_service_certs(self.replicas[0])
+
+
+class TestClientInstallMLDSA(CALessMLDSABase, CALessBase):
+    """Client install against an ML-DSA CA-less master."""
+
+    num_clients = 1
+
+    def test_client_install(self):
+        "IPA client install against ML-DSA CA-less server"
+
+        self.create_pkcs12('ca1/server')
+        self.prepare_cacert('ca1')
+
+        result = self.install_server()
+        assert result.returncode == 0
+        self.verify_mldsa_service_certs(self.master)
+
+        self.clients[0].run_command(['ipa-client-install',
+                                     '--domain', self.master.domain.name,
+                                     '--server', self.master.hostname,
+                                     '-p', self.master.config.admin_name,
+                                     '-w', self.master.config.admin_password,
+                                     '-U'])
+
+        self.verify_installation()
+
+
+class TestServerReplicaCALessToCAFullMLDSA(CALessMLDSABase, CALessBase):
+    """
+    ML-DSA CA-less master/replica promoted to CA-full with ML-DSA IPA CA.
+    """
+    num_replicas = 1
+
+    def test_install_caless_server_replica(self):
+        """Install ML-DSA CA-less master and replica"""
+
+        self.create_pkcs12('ca1/server')
+        self.prepare_cacert('ca1')
+
+        master = self.install_server()
+        assert master.returncode == 0
+        self.verify_mldsa_service_certs(self.master)
+
+        self.create_pkcs12('ca1/replica', filename='replica.p12')
+
+        replica = self.prepare_replica()
+        assert replica.returncode == 0
+        self.verify_mldsa_service_certs(self.replicas[0])
+
+    def test_server_ipa_ca_install(self):
+        """Install ML-DSA CA on master"""
+
+        tasks.install_ca(
+            self.master,
+            extra_args=['--ca-key-type', self.ca_key_type],
+        )
+
+        ca_show = self.master.run_command(['ipa', 'ca-show', 'ipa'])
+        assert 'Subject DN: CN=Certificate Authority,O={}'.format(
+            self.master.domain.realm) in ca_show.stdout_text
+
+    def test_replica_ipa_ca_install(self):
+        """Install CA clone on replica"""
+
+        replica = self.replicas[0]
+        tasks.install_ca(replica)
+
+        ca_show = replica.run_command(['ipa', 'ca-show', 'ipa'])
+        assert 'Subject DN: CN=Certificate Authority,O={}'.format(
+            self.master.domain.realm) in ca_show.stdout_text
